@@ -1,0 +1,171 @@
+const { ethers } = require('ethers');
+const { viem } = require('viem');
+const {  createClient } = require("@reservoir0x/reservoir-sdk");
+const { DefenderRelaySigner,DefenderRelayProvider } = require('defender-relay-client/lib/ethers');
+const mysql = require('mysql');
+
+const connection = mysql.createConnection({
+  host: '192.168.0.71',
+  user: 'root',
+  password: 'password',
+  database: 'database',
+  supportBigNumbers: true,
+  bigNumberStrings: true
+});
+
+const credentials = { apiKey: 'apiKey', apiSecret: 'apiSecret' };
+
+async function buyTokens(contract,tokenId, domain,id,amount,authId) {
+
+const credentials = { apiKey: 'apiKey', apiSecret: 'apiSecret' };
+
+const provider = new DefenderRelayProvider(credentials);
+const signer = new DefenderRelaySigner(credentials, provider, { speed: 'fast' });
+
+  const reservoirClient = createClient({
+    apiBase: 'https://api.reservoir.tools',
+    apiKey: "apiKey",
+    source:domain,
+    logLevel: 4
+  });
+
+
+
+  const transaction = await reservoirClient.actions
+    .buyToken({
+      items:[{token:contract+":"+tokenId,quantity:amount}],
+      orderIds: [
+        id,
+      ],
+      signer,
+      onProgress: (steps) => {
+        if (!steps) {
+          console.log("steps -> " +steps)
+          return;
+        }
+        console.log("steps -> " +steps)
+        steps.find((step) => {
+          step.items.find((res) => {
+            console.log(res)
+            if (res.status == "complete" && res.txHash) {
+              console.log(res.txHash, "buyNFT txHash");
+              updateOrderStatusSuccess(authId,res.txHash);
+            }else if(res.status == "incomplete"){
+              updateOrderStatusFail(authId)
+              console.log("fail");
+            }
+          });
+        });
+      },
+    })
+    .catch((error) => {
+      console.log(error, "Listing order exception");
+      updateOrderStatusFail(authId);
+      connection.end();
+      process.exit(1);
+    });
+
+    console.log("transaction:"+transaction.to)
+
+}
+
+
+async function listToken(contract,tokenId, domain,id,amount,authId) {
+
+  const reservoirClient = createClient({
+    apiBase: "https://api.reservoir.tools",
+    apiKey: "apiKey",
+    source: domain,
+  });
+
+  const provider = new ethers.providers.JsonRpcProvider("https://mainnet.infura.io/v3/da36724f000d4a84b7d0c562cbbb4d5e");
+  const signer = new ethers.Wallet("a5d56edf1edb2965905c2f61492c73c6d6283a639deb7eb90fb6a6a46a70eb66", provider);
+
+  reservoirClient.actions.acceptOffer({
+    token: {
+      tokenId: tokenId,
+      contract: contract,
+    },
+    options: {
+      orderId:id,
+      quantity: amount,
+    },
+    signer,
+    onProgress: (steps) => {
+      step.items.find((res) => {
+        if (res.status == "complete" && res.txHash) {
+          console.log(res.txHash, "listToken txHash");
+          updateOrderStatusSuccess(authId,res.txHash);
+        }else if(res.status == "incomplete"){
+              updateOrderStatusFail(authId)
+              console.log("fail");
+        }
+      });
+    },
+  }).catch((error) => {
+    console.log(error.response.status, "Offer sheet exceptions");
+    updateOrderStatusFail(authId);
+    connection.end();
+    process.exit(1);
+
+  });
+}
+
+
+
+
+function getDetailsFromDatabase(callback) {
+  connection.connect();
+  connection.query('SELECT audit_id,id,collections_address,token_id,domain,quantity_remaining,status,direction FROM hz_nft_goods_orders_audit where status=0 and audit_id='+1670364463096254466, 
+    function (error, results, fields) {
+    if (error) throw error;
+    const details = results;
+
+    callback(details);
+  });
+}
+
+function updateOrderStatusSuccess(id,hash) {
+
+  connection.query("update hz_nft_goods_orders_audit set status=2 and hash='"+hash+"' where audit_id="+BigInt(id), 
+    function (error, results) {
+    if (error) throw error;
+    console.log("success");
+    console.log(results);
+
+  });
+
+}
+
+function updateOrderStatusFail(id) {
+
+  connection.query("update hz_nft_goods_orders_audit set status=3 where audit_id="+BigInt(id), 
+    function (error, results) {
+    if (error) throw error;
+    console.log("fail");
+    console.log(results);
+
+  });
+    connection.end();
+    process.exit(1);
+
+
+}
+
+getDetailsFromDatabase((details) => {
+          buyTokens("0x97a20815a061eae224c4fdf3109731f73743db73","6","opensea.io","0xb626b30b3b703d591d4449f4df0ce827edd9acabdabf80c4e9e6050f3baf45c6","1","1670364463096254466");
+
+  for (var i in details) {
+
+    if (details[i].status ==0) {
+      if (details[i].direction ==0) {
+        buyTokens(details[i].collections_address,details[i].token_id, details[i].domain,details[i].id,details[i].quantity_remaining,String(details[i].audit_id));
+
+      }else if (details[i].direction ==1) {
+        listToken(details[i].collections_address,details[i].token_id, details[i].domain,details[i].id,details[i].quantity_remaining,String(details[i].audit_id));
+      }
+    }
+  }
+
+
+});
